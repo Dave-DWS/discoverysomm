@@ -429,6 +429,28 @@
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
+        async function fetchWithRetry(url, options, maxRetries = 3) {
+            let delay = 1000;
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) return response;
+                    
+                    if (response.status === 429 || response.status >= 500) {
+                        await new Promise(r => setTimeout(r, delay));
+                        delay *= 2;
+                        continue;
+                    }
+                    const errorText = await response.text();
+                    throw new Error(`API Error ${response.status}: ${errorText}`);
+                } catch (err) {
+                    if (i === maxRetries - 1) throw err;
+                    await new Promise(r => setTimeout(r, delay));
+                    delay *= 2;
+                }
+            }
+        }
+
         async function handleFormSubmit(e) {
             e.preventDefault();
             const dish = document.getElementById('dishInput').value.trim();
@@ -443,28 +465,30 @@
             document.getElementById('loadingState').scrollIntoView({ behavior: 'smooth', block: 'center' });
 
             try {
-                const prompt = `Act as the Master Sommelier for Discovery Wines & Spirits in Bermuda (discoverywines.bm).
+                const prompt = `Act as an expert Master Sommelier for Discovery Wines & Spirits in Bermuda (discoverywines.bm).
 Analyze this dish: "${dish}" for occasion "${occasion}" with budget tier "${budget}".
-Select wines available in the Discovery Wines Bermuda portfolio (such as Pascal Jolivet Sancerre, Whispering Angel Rosé, Marques de Riscal Reserva, J. Lohr, Masi Campofiorin, Laurent-Perrier, Auntsfield Pinot Noir, Santa Margherita, Bogle, etc.).
+Select a unique, bespoke wine pairing tailored specifically to "${dish}". 
+Recommend real wines from or inspired by Discovery Wines Bermuda portfolio (e.g., Sancerre, Pinot Noir, Cabernet Sauvignon, Chablis, Champagne, Rioja, Sauvignon Blanc, Malbec, Syrah, Brunello, Barolo, Chardonnay, etc. depending on what best pairs with "${dish}"). 
+Do NOT default to Sancerre unless the dish specifically calls for it.
 
 Provide response strictly adhering to this JSON structure:
 {
-  "dishTitle": "Cleaned name of dish",
+  "dishTitle": "${dish}",
   "primaryRecommendation": {
     "category": "Red / White / Sparkling / Rosé / Fortified",
-    "wineStyleTitle": "Primary Varietal / Appellation in Discovery Wines portfolio",
-    "regionCountry": "Notable Region & Country",
+    "wineStyleTitle": "Wine Name / Varietal",
+    "regionCountry": "Region & Country",
     "tastingNotes": "Aroma, body, acidity, palate and finish",
-    "whyItWorks": "Scientific and culinary explanation matching acidity, tannins, fat, or spice in this dish",
+    "whyItWorks": "Scientific and culinary explanation matching acidity, tannins, fat, or spice in ${dish}",
     "bottlingPicks": [
       { "name": "Specific Bottle Name 1", "price": "$XX.XX BMD" },
       { "name": "Specific Bottle Name 2", "price": "$XX.XX BMD" }
     ]
   },
   "alternativePick": {
-    "wineStyleTitle": "Alternative Varietal in Discovery Wines catalog",
+    "wineStyleTitle": "Alternative Varietal",
     "regionCountry": "Region & Country",
-    "description": "Why this alternative pairing works wonderfully",
+    "description": "Why this alternative pairing works",
     "contrastExplanation": "Brief contrast vs primary pick"
   },
   "sommelierTip": {
@@ -472,7 +496,7 @@ Provide response strictly adhering to this JSON structure:
     "description": "Core oenology principle applied here"
   },
   "servingRitual": {
-    "temperature": "Serving temperature range in °C & °F",
+    "temperature": "Serving temperature in °C & °F",
     "glassware": "Ideal Glassware type",
     "decanting": "Aeration or decanting advice"
   }
@@ -544,21 +568,17 @@ Provide response strictly adhering to this JSON structure:
                     }
                 };
 
-                const response = await fetch(apiUrl, {
+                const response = await fetchWithRetry(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
-                if (!response.ok) {
-                    throw new Error(`API Error: ${response.status}`);
-                }
-
                 const result = await response.json();
                 const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
 
                 if (!jsonText) {
-                    throw new Error('No valid content returned');
+                    throw new Error('No valid content returned from Gemini API');
                 }
 
                 const data = JSON.parse(jsonText);
@@ -567,11 +587,141 @@ Provide response strictly adhering to this JSON structure:
                 renderResults(currentPairingData);
 
             } catch (err) {
-                console.error(err);
-                renderFallbackPairing(dish, budget, occasion);
+                console.warn("Gemini API call warning, using dynamic sommelier engine fallback:", err);
+                renderDynamicFallbackPairing(dish, budget, occasion);
             } finally {
                 document.getElementById('loadingState').classList.add('hidden');
             }
+        }
+
+        function renderDynamicFallbackPairing(dish, budget, occasion) {
+            const lowerDish = dish.toLowerCase();
+            let fallbackData;
+
+            if (lowerDish.includes('steak') || lowerDish.includes('ribeye') || lowerDish.includes('beef') || lowerDish.includes('lamb') || lowerDish.includes('burger')) {
+                fallbackData = {
+                    dishTitle: dish,
+                    primaryRecommendation: {
+                        category: "Red Wine",
+                        wineStyleTitle: "Napa Valley Cabernet Sauvignon",
+                        regionCountry: "Napa Valley, California",
+                        tastingNotes: "Rich cassis, dark plum, espresso, structured tannins, and elegant French oak.",
+                        whyItWorks: "Bold tannins bind to the proteins and rendered fats in red meat, softening the wine while elevating meaty richness.",
+                        bottlingPicks: [
+                            { name: "J. Lohr Seven Oaks Cabernet Sauvignon", price: "$28.95 BMD" },
+                            { name: "Caymus Vineyards Napa Valley Cabernet", price: "$115.00 BMD" }
+                        ]
+                    },
+                    alternativePick: {
+                        wineStyleTitle: "Mendoza Malbec",
+                        regionCountry: "Mendoza, Argentina",
+                        description: "Plum-forward with velvet tannins and subtle smoke that beautifully complements charred, grilled meats.",
+                        contrastExplanation: "Softer acidity and juicier dark fruit compared to structured Napa Cabernet."
+                    },
+                    sommelierTip: {
+                        title: "Tannin & Protein Affinity",
+                        description: "High-protein meats neutralize stringent tannins, unlocking hidden fruit notes and lush velvety mouthfeel."
+                    },
+                    servingRitual: {
+                        temperature: "16°C - 18°C (60°F - 65°F)",
+                        glassware: "Large Bordeaux Glass",
+                        decanting: "Decant 45 minutes before serving"
+                    }
+                };
+            } else if (lowerDish.includes('pasta') || lowerDish.includes('risotto') || lowerDish.includes('truffle') || lowerDish.includes('mushroom') || lowerDish.includes('tomato')) {
+                fallbackData = {
+                    dishTitle: dish,
+                    primaryRecommendation: {
+                        category: "Red Wine",
+                        wineStyleTitle: "Masi Campofiorin Ripasso / Chianti Classico",
+                        regionCountry: "Veneto / Tuscany, Italy",
+                        tastingNotes: "Ripe cherry, wilted rose, dried oregano, savory earth, and vibrant acidity.",
+                        whyItWorks: "High natural Italian acidity cuts through rich olive oil, creamy sauces, or savory tomato acidity without being overwhelmed.",
+                        bottlingPicks: [
+                            { name: "Masi Campofiorin Ripasso", price: "$29.95 BMD" },
+                            { name: "Castello di Albola Chianti Classico", price: "$32.50 BMD" }
+                        ]
+                    },
+                    alternativePick: {
+                        wineStyleTitle: "Oregon Pinot Noir",
+                        regionCountry: "Willamette Valley, USA",
+                        description: "Earthy forest floor and red currant notes pair seamlessly with truffles, mushrooms, and savory herbs.",
+                        contrastExplanation: "Lighter body with silky finesse rather than savory Italian tannic drive."
+                    },
+                    sommelierTip: {
+                        title: "Acid Matching Principle",
+                        description: "Always match wine acidity to sauce acidity; low-acid wines taste flat when paired with acidic tomato or wine sauces."
+                    },
+                    servingRitual: {
+                        temperature: "15°C - 17°C (59°F - 62°F)",
+                        glassware: "Burgundy Glass",
+                        decanting: "Aerate 20 minutes before serving"
+                    }
+                };
+            } else if (lowerDish.includes('chicken') || lowerDish.includes('pork') || lowerDish.includes('salmon') || lowerDish.includes('duck')) {
+                fallbackData = {
+                    dishTitle: dish,
+                    primaryRecommendation: {
+                        category: "Red Wine",
+                        wineStyleTitle: "Auntsfield Single Vineyard Pinot Noir",
+                        regionCountry: "Marlborough, New Zealand",
+                        tastingNotes: "Bright red cherry, wild strawberry, clove spice, and silk-smooth tannins.",
+                        whyItWorks: "Pinot Noir offers subtle body that respects medium-weight white meats and rich fish without overpowering delicate seasoning.",
+                        bottlingPicks: [
+                            { name: "Auntsfield Single Vineyard Pinot Noir", price: "$38.00 BMD" },
+                            { name: "Bogle Pinot Noir", price: "$24.50 BMD" }
+                        ]
+                    },
+                    alternativePick: {
+                        wineStyleTitle: "Oaked Chardonnay",
+                        regionCountry: "Sonoma Coast, USA",
+                        description: "Creamy vanilla, brioche, and golden apple notes complement roasted poultry and buttery glazes.",
+                        contrastExplanation: "Full-bodied white alternative providing rich mouthfeel without red wine tannins."
+                    },
+                    sommelierTip: {
+                        title: "Bridge the Intensity",
+                        description: "Medium-weight dishes call for medium-bodied wines with high aromatics to enhance without overwhelming."
+                    },
+                    servingRitual: {
+                        temperature: "14°C - 16°C (57°F - 60°F)",
+                        glassware: "Pinot Noir / Burgundy Glass",
+                        decanting: "Serve directly chilled slightly"
+                    }
+                };
+            } else {
+                fallbackData = {
+                    dishTitle: dish,
+                    primaryRecommendation: {
+                        category: "White Wine",
+                        wineStyleTitle: "Pascal Jolivet Sancerre / Crisp Sauvignon Blanc",
+                        regionCountry: "Loire Valley, France",
+                        tastingNotes: "Flinty minerality, green apple, lime blossom, and razor-sharp citrus acidity.",
+                        whyItWorks: "Vibrant citrus acidity cuts through richness, clears the palate, and highlights fresh coastal ingredients.",
+                        bottlingPicks: [
+                            { name: "Pascal Jolivet Sancerre Blanc", price: "$43.75 BMD" },
+                            { name: "Santa Margherita Pinot Grigio", price: "$27.95 BMD" }
+                        ]
+                    },
+                    alternativePick: {
+                        wineStyleTitle: "Whispering Angel Rosé",
+                        regionCountry: "Côtes de Provence, France",
+                        description: "Crushed red berries, peach blossom, and crisp dry finish suitable for island dining.",
+                        contrastExplanation: "Offers delicate red fruit freshness with white wine crispness."
+                    },
+                    sommelierTip: {
+                        title: "Island Climate & Acidity",
+                        description: "High-acidity white and rosé wines stay vibrant in warm Bermuda climates and refresh the palate between bites."
+                    },
+                    servingRitual: {
+                        temperature: "8°C - 10°C (46°F - 50°F)",
+                        glassware: "Standard White Wine Glass",
+                        decanting: "Serve well-chilled"
+                    }
+                };
+            }
+
+            currentPairingData = { ...fallbackData, budget, occasion, timestamp: new Date().toISOString() };
+            renderResults(currentPairingData);
         }
 
         function renderResults(data) {
